@@ -56,7 +56,7 @@
     <input type="text" id="search-term" placeholder="Enter word or phrase to search..." disabled />
     <div class="button-group">
       <button id="search-btn" class="btn-search" disabled onclick="searchMatches()">Search</button>
-      <button id="delete-btn" class="btn-delete" disabled onclick="deleteSelected()">Delete Selected & Links</button>
+      <button id="delete-btn" class="btn-delete" disabled onclick="deleteSelected()">Delete Selected & ALL Links</button>
       <button id="download-btn" class="btn-download" disabled onclick="downloadModifiedPDF()">Download PDF</button>
     </div>
   </div>
@@ -201,7 +201,7 @@
     });
   }
 
-  // Enhanced deletion & link annihilation
+  // Cover selected text AND completely remove ALL hyperlink annotations
   async function deleteSelected() {
     const selectedList = foundMatches.filter(m => m.selected);
     if (selectedList.length === 0) return alert('Please select at least one occurrence to delete.');
@@ -209,8 +209,12 @@
     const pages = loadedPdfLibDoc.getPages();
     const searchTerm = document.getElementById('search-term').value.trim().toLowerCase();
 
+    // Track which pages need link cleaning
+    const pagesToClean = new Set();
+
     for (const match of selectedList) {
       const page = pages[match.pageIndex];
+      pagesToClean.add(match.pageIndex);
 
       const fullStr = match.text;
       const lowerStr = fullStr.toLowerCase();
@@ -224,13 +228,12 @@
       const startXOffset = matchIndex > -1 ? matchIndex * charWidthEstimate : 0;
       const targetWidth = matchIndex > -1 ? searchTerm.length * charWidthEstimate : match.width;
 
-      // Generous padding (+6px width, +8px height, shifted -4px Y) to guarantee visual whiteout coverage
       const boxX = transformX + startXOffset - 2;
       const boxY = transformY - 4; 
       const boxW = targetWidth + 6;
       const boxH = fontSize + 8;
 
-      // 1. Draw solid white rectangle over text
+      // 1. Cover visual text with whiteout
       page.drawRectangle({
         x: boxX,
         y: boxY,
@@ -238,45 +241,38 @@
         height: boxH,
         color: PDFLib.rgb(1, 1, 1),
       });
+    }
 
-      // 2. Erase overlapping Link Annotations
+    // 2. Complete destruction of ALL hyperlink annotations on affected pages
+    pagesToClean.forEach(pIndex => {
+      const page = pages[pIndex];
       const annots = page.node.Annots();
+      
       if (annots) {
         const annotsArray = annots.array;
         for (let i = annotsArray.length - 1; i >= 0; i--) {
           const dict = loadedPdfLibDoc.context.lookup(annotsArray[i]);
           if (dict) {
             const subtype = dict.get(PDFLib.PDFName.of('Subtype'))?.name;
-            const rect = dict.get(PDFLib.PDFName.of('Rect'))?.asArray();
-
-            if (rect && (subtype === 'Link' || dict.has(PDFLib.PDFName.of('A')))) {
-              const [rX1, rY1, rX2, rY2] = rect.map(n => n.asNumber());
-
-              // Check if whiteout rectangle overlaps the annotation rectangle
-              const overlaps = !(
-                boxX > Math.max(rX1, rX2) || 
-                (boxX + boxW) < Math.min(rX1, rX2) || 
-                boxY > Math.max(rY1, rY2) || 
-                (boxY + boxH) < Math.min(rY1, rY2)
-              );
-
-              if (overlaps) {
-                annotsArray.splice(i, 1); // Permanently delete link from page
-              }
+            const hasAction = dict.has(PDFLib.PDFName.of('A'));
+            
+            // If it is a Link subtype OR has an Action dictionary, remove it completely
+            if (subtype === 'Link' || hasAction) {
+              annotsArray.splice(i, 1);
             }
           }
         }
       }
-    }
+    });
 
-    // Save and re-render modified document
+    // Save and re-render document
     pdfArrayBuffer = await loadedPdfLibDoc.save();
     loadedPdfLibDoc = await PDFLib.PDFDocument.load(pdfArrayBuffer);
     
     await renderPdfViewer();
 
-    document.getElementById('status').innerText = `Successfully erased ${selectedList.length} occurrence(s) and permanently disabled links!`;
-    document.getElementById('results').innerHTML = `<p style="color: #059669; font-weight: 600;">Deletion complete! Text covered and links purged.</p>`;
+    document.getElementById('status').innerText = `Successfully erased text and removed all hyperlinks!`;
+    document.getElementById('results').innerHTML = `<p style="color: #059669; font-weight: 600;">Deletion completed! All link annotations cleared.</p>`;
     document.getElementById('delete-btn').disabled = true;
   }
 
