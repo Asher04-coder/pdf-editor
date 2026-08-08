@@ -91,7 +91,7 @@
     document.getElementById('status').innerText = `Loading "${file.name}"...`;
     pdfArrayBuffer = await file.arrayBuffer();
     
-    loadedPdfLibDoc = await PDFLib.PDFDocument.load(pdfArrayBuffer.slice(0));
+    loadedPdfLibDoc = await PDFLib.PDFDocument.load(pdfArrayBuffer);
 
     await renderPdfViewer();
 
@@ -145,20 +145,16 @@
     for (let pIdx = 0; pIdx < pdfjsDoc.numPages; pIdx++) {
       const page = await pdfjsDoc.getPage(pIdx + 1);
       const textContent = await page.getTextContent();
-      const viewport = page.getViewport({ scale: 2.0 }); // High-precision viewport scale
       
       textContent.items.forEach((item) => {
         if (item.str.toLowerCase().includes(term.toLowerCase())) {
-          const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
-          
           foundMatches.push({
             pageIndex: pIdx,
             pageNumber: pIdx + 1,
             text: item.str,
-            x: tx[4],
-            y: tx[5],
-            width: item.width * 2.0,
-            height: (item.height || 12) * 2.0,
+            transform: item.transform,
+            width: item.width,
+            height: item.height || 12,
             selected: true
           });
         }
@@ -205,67 +201,78 @@
     });
   }
 
-  // Pure Canvas Rasterization & Clean PDF Rebuilding
+  // Cover selected text AND completely remove ALL hyperlink annotations
   async function deleteSelected() {
     const selectedList = foundMatches.filter(m => m.selected);
     if (selectedList.length === 0) return alert('Please select at least one occurrence to delete.');
 
-    document.getElementById('status').innerText = 'Sanitizing PDF: Removing text & destroying hyperlinks...';
+    const pages = loadedPdfLibDoc.getPages();
+    const searchTerm = document.getElementById('search-term').value.trim().toLowerCase();
 
-    const pdfjsDoc = await pdfjsLib.getDocument({ data: pdfArrayBuffer.slice(0) }).promise;
-    const newPdfDoc = await PDFLib.PDFDocument.create();
+    // Track which pages need link cleaning
+    const pagesToClean = new Set();
 
-    for (let pNum = 1; pNum <= pdfjsDoc.numPages; pNum++) {
-      const page = await pdfjsDoc.getPage(pNum);
-      const viewport = page.getViewport({ scale: 2.0 }); // Render at 2x resolution for high quality
+    for (const match of selectedList) {
+      const page = pages[match.pageIndex];
+      pagesToClean.add(match.pageIndex);
 
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
+      const fullStr = match.text;
+      const lowerStr = fullStr.toLowerCase();
+      const matchIndex = lowerStr.indexOf(searchTerm);
 
-      // 1. Render PDF page to standard HTML5 canvas
-      await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+      const transformX = match.transform[4];
+      const transformY = match.transform[5];
+      const fontSize = match.height || 12;
 
-      // 2. Erase selected text matches directly on the canvas image
-      const matchesOnThisPage = selectedList.filter(m => m.pageNumber === pNum);
-      ctx.fillStyle = '#FFFFFF';
+      const charWidthEstimate = match.width / (fullStr.length || 1);
+      const startXOffset = matchIndex > -1 ? matchIndex * charWidthEstimate : 0;
+      const targetWidth = matchIndex > -1 ? searchTerm.length * charWidthEstimate : match.width;
 
-      matchesOnThisPage.forEach(match => {
-        // Apply whiteout rectangle directly over canvas pixel data
-        ctx.fillRect(
-          match.x - 6, 
-          match.y - match.height - 4, 
-          match.width + 12, 
-          match.height + 12
-        );
-      });
+      const boxX = transformX + startXOffset - 2;
+      const boxY = transformY - 4; 
+      const boxW = targetWidth + 6;
+      const boxH = fontSize + 8;
 
-      // 3. Convert clean canvas to PNG image and embed into fresh PDF
-      const imgDataUrl = canvas.toDataURL('image/png');
-      const pngImage = await newPdfDoc.embedPng(imgDataUrl);
-
-      const unscaledViewport = page.getViewport({ scale: 1.0 });
-      const newPage = newPdfDoc.addPage([unscaledViewport.width, unscaledViewport.height]);
-
-      // Draw flattened page image without any underlying link dictionaries
-      newPage.drawImage(pngImage, {
-        x: 0,
-        y: 0,
-        width: unscaledViewport.width,
-        height: unscaledViewport.height,
+      // 1. Cover visual text with whiteout
+      page.drawRectangle({
+        x: boxX,
+        y: boxY,
+        width: boxW,
+        height: boxH,
+        color: PDFLib.rgb(1, 1, 1),
       });
     }
 
-    // Save flattened, link-free PDF document
-    const pdfBytes = await newPdfDoc.save();
-    pdfArrayBuffer = pdfBytes.buffer.slice(0);
-    loadedPdfLibDoc = await PDFLib.PDFDocument.load(pdfArrayBuffer.slice(0));
+    // 2. Complete destruction of ALL hyperlink annotations on affected pages
+    pagesToClean.forEach(pIndex => {
+      const page = pages[pIndex];
+      const annots = page.node.Annots();
+      
+      if (annots) {
+        const annotsArray = annots.array;
+        for (let i = annotsArray.length - 1; i >= 0; i--) {
+          const dict = loadedPdfLibDoc.context.lookup(annotsArray[i]);
+          if (dict) {
+            const subtype = dict.get(PDFLib.PDFName.of('Subtype'))?.name;
+            const hasAction = dict.has(PDFLib.PDFName.of('A'));
+            
+            // If it is a Link subtype OR has an Action dictionary, remove it completely
+            if (subtype === 'Link' || hasAction) {
+              annotsArray.splice(i, 1);
+            }
+          }
+        }
+      }
+    });
 
+    // Save and re-render document
+    pdfArrayBuffer = await loadedPdfLibDoc.save();
+    loadedPdfLibDoc = await PDFLib.PDFDocument.load(pdfArrayBuffer);
+    
     await renderPdfViewer();
 
-    document.getElementById('status').innerText = `Successfully erased text and destroyed all hyperlinks!`;
-    document.getElementById('results').innerHTML = `<p style="color: #059669; font-weight: 600;">Sanitization complete! Text deleted and hyperlinks destroyed.</p>`;
+    document.getElementById('status').innerText = `Successfully erased text and removed all hyperlinks!`;
+    document.getElementById('results').innerHTML = `<p style="color: #059669; font-weight: 600;">Deletion completed! All link annotations cleared.</p>`;
     document.getElementById('delete-btn').disabled = true;
   }
 
