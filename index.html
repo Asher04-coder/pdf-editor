@@ -8,25 +8,41 @@
   <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
   <style>
     * { box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: #f1f5f9; }
-    .app-container { max-width: 1400px; margin: 0 auto; background: white; padding: 24px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
-    .upload-zone { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 20px; background: #f8fafc; }
-    .controls { display: flex; gap: 10px; margin-bottom: 20px; align-items: center; flex-wrap: wrap; }
-    input[type="text"] { padding: 10px 14px; font-size: 15px; border: 1px solid #cbd5e1; border-radius: 6px; flex: 1; min-width: 200px; }
-    button { padding: 10px 18px; font-size: 15px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 12px; background: #f1f5f9; }
+    .app-container { max-width: 1400px; margin: 0 auto; background: white; padding: 16px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    .upload-zone { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 16px; text-align: center; margin-bottom: 16px; background: #f8fafc; }
+    
+    /* Responsive Controls Layout */
+    .controls { display: flex; gap: 10px; margin-bottom: 16px; align-items: center; flex-wrap: wrap; }
+    input[type="text"] { padding: 10px 14px; font-size: 15px; border: 1px solid #cbd5e1; border-radius: 6px; flex: 1 1 200px; width: 100%; }
+    
+    .button-group { display: flex; gap: 8px; flex-wrap: wrap; width: 100%; }
+    button { padding: 10px 16px; font-size: 14px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; flex: 1; min-width: 120px; }
+    
     .btn-search { background: #2563eb; color: white; }
     .btn-delete { background: #dc2626; color: white; }
     .btn-download { background: #059669; color: white; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
-    .status-bar { margin-bottom: 15px; font-weight: 600; color: #334155; }
+    .status-bar { margin-bottom: 15px; font-weight: 600; color: #334155; word-break: break-word; }
     
-    /* Layout with Sidebar + PDF Viewer */
-    .workspace { display: grid; grid-template-columns: 320px 1fr; gap: 20px; min-height: 600px; }
-    .sidebar { border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; background: #fafafa; max-height: 800px; overflow-y: auto; }
-    .viewer-pane { border: 1px solid #cbd5e1; border-radius: 8px; background: #525659; padding: 20px; max-height: 800px; overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 20px; }
+    /* Workspace Responsive Grid */
+    .workspace { display: grid; grid-template-columns: 300px 1fr; gap: 16px; min-height: 500px; }
+    .sidebar { border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; background: #fafafa; max-height: 700px; overflow-y: auto; }
+    .viewer-pane { border: 1px solid #cbd5e1; border-radius: 8px; background: #525659; padding: 12px; max-height: 700px; overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 16px; width: 100%; }
     
-    .page-container { position: relative; background: white; box-shadow: 0 4px 8px rgba(0,0,0,0.3); }
-    canvas { display: block; }
+    .page-container { position: relative; background: white; box-shadow: 0 4px 8px rgba(0,0,0,0.3); max-width: 100%; }
+    canvas { display: block; max-width: 100%; height: auto !important; }
+
+    /* Mobile Responsive Breakpoint */
+    @media (max-width: 768px) {
+      body { padding: 8px; }
+      .app-container { padding: 12px; }
+      .workspace { grid-template-columns: 1fr; } /* Stack sidebar on top of viewer */
+      .sidebar { max-height: 250px; }
+      .viewer-pane { padding: 8px; max-height: 550px; }
+      .button-group { flex-direction: column; }
+      button { width: 100%; }
+    }
   </style>
 </head>
 <body>
@@ -36,25 +52,27 @@
   
   <!-- 1. File Upload Section -->
   <div class="upload-zone">
-    <input type="file" id="pdf-upload" accept="application/pdf" />
-    <p style="margin: 8px 0 0; color: #64748b; font-size: 14px;">Select any PDF file from your computer to view and edit it.</p>
+    <input type="file" id="pdf-upload" accept="application/pdf" style="max-width: 100%;" />
+    <p style="margin: 8px 0 0; color: #64748b; font-size: 14px;">Select any PDF file from your device to view and edit it.</p>
   </div>
 
   <!-- 2. Search & Action Controls -->
   <div class="controls">
     <input type="text" id="search-term" placeholder="Enter word or phrase to search..." disabled />
-    <button id="search-btn" class="btn-search" disabled onclick="searchMatches()">Search</button>
-    <button id="delete-btn" class="btn-delete" disabled onclick="deleteSelected()">Delete Selected & Links</button>
-    <button id="download-btn" class="btn-download" disabled onclick="downloadModifiedPDF()">Download PDF</button>
+    <div class="button-group">
+      <button id="search-btn" class="btn-search" disabled onclick="searchMatches()">Search</button>
+      <button id="delete-btn" class="btn-delete" disabled onclick="deleteSelected()">Delete Selected & Links</button>
+      <button id="download-btn" class="btn-download" disabled onclick="downloadModifiedPDF()">Download PDF</button>
+    </div>
   </div>
 
   <div id="status" class="status-bar">Please upload a PDF file to begin.</div>
 
-  <!-- 3. Main Workspace (Results Sidebar + Live PDF Document Viewer) -->
+  <!-- 3. Main Workspace (Results Sidebar + Live Responsive PDF Viewer) -->
   <div class="workspace">
     <div id="results" class="sidebar">No document loaded.</div>
     <div id="viewer" class="viewer-pane">
-      <p style="color: #cbd5e1; margin-top: 50px;">Document preview will appear here after uploading.</p>
+      <p style="color: #cbd5e1; margin-top: 50px; text-align: center;">Document preview will appear here after uploading.</p>
     </div>
   </div>
 </div>
@@ -66,7 +84,14 @@
   let loadedPdfLibDoc = null;
   let foundMatches = [];
 
-  // Handle PDF File Upload & Render Document Pages
+  // Re-render PDF on screen resize to keep pages fitting mobile screens
+  window.addEventListener('resize', () => {
+    if (pdfArrayBuffer) {
+      renderPdfViewer();
+    }
+  });
+
+  // Handle PDF File Upload
   document.getElementById('pdf-upload').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -74,13 +99,10 @@
     document.getElementById('status').innerText = `Loading "${file.name}"...`;
     pdfArrayBuffer = await file.arrayBuffer();
     
-    // Load document for PDF-Lib editing
     loadedPdfLibDoc = await PDFLib.PDFDocument.load(pdfArrayBuffer);
 
-    // Render visual pages in viewer
     await renderPdfViewer();
 
-    // Enable controls
     document.getElementById('search-term').disabled = false;
     document.getElementById('search-btn').disabled = false;
     document.getElementById('download-btn').disabled = false;
@@ -88,16 +110,21 @@
     document.getElementById('results').innerText = 'Type a term above and click Search.';
   });
 
-  // Render every page onto canvas elements in the viewer
+  // Render pages with dynamic responsive scaling
   async function renderPdfViewer() {
     const viewer = document.getElementById('viewer');
-    viewer.innerHTML = ''; // Clear previous render
+    viewer.innerHTML = ''; 
 
     const pdfjsDoc = await pdfjsLib.getDocument({ data: pdfArrayBuffer.slice(0) }).promise;
+    const containerWidth = viewer.clientWidth - 24; // Calculate current display width
 
     for (let pNum = 1; pNum <= pdfjsDoc.numPages; pNum++) {
       const page = await pdfjsDoc.getPage(pNum);
-      const viewport = page.getViewport({ scale: 1.2 });
+      const unscaledViewport = page.getViewport({ scale: 1.0 });
+      
+      // Auto-fit scale to match device width
+      const scale = Math.min(containerWidth / unscaledViewport.width, 1.5);
+      const viewport = page.getViewport({ scale: scale });
 
       const pageContainer = document.createElement('div');
       pageContainer.className = 'page-container';
@@ -186,7 +213,7 @@
     });
   }
 
-  // Delete chosen occurrences & their link annotations, then refresh view
+  // Delete chosen occurrences & their link annotations
   async function deleteSelected() {
     const selectedList = foundMatches.filter(m => m.selected);
     if (selectedList.length === 0) return alert('Please select at least one occurrence to delete.');
@@ -249,11 +276,10 @@
       }
     }
 
-    // Save modified bytes and re-render the document view
     pdfArrayBuffer = await loadedPdfLibDoc.save();
     loadedPdfLibDoc = await PDFLib.PDFDocument.load(pdfArrayBuffer);
     
-    await renderPdfViewer(); // Live refresh viewer canvas
+    await renderPdfViewer(); 
 
     document.getElementById('status').innerText = `Successfully deleted ${selectedList.length} occurrence(s) and their links!`;
     document.getElementById('results').innerHTML = `<p style="color: #059669; font-weight: 600;">Deletion completed! Document view updated.</p>`;
