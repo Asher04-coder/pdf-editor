@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF Search, View & Batch Eraser</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+  <script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 20px; background: #f1f5f9; }
+    .app-container { max-width: 1400px; margin: 0 auto; background: white; padding: 24px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    .upload-zone { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 20px; background: #f8fafc; }
+    .controls { display: flex; gap: 10px; margin-bottom: 20px; align-items: center; flex-wrap: wrap; }
+    input[type="text"] { padding: 10px 14px; font-size: 15px; border: 1px solid #cbd5e1; border-radius: 6px; flex: 1; min-width: 200px; }
+    button { padding: 10px 18px; font-size: 15px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
+    .btn-search { background: #2563eb; color: white; }
+    .btn-delete { background: #dc2626; color: white; }
+    .btn-download { background: #059669; color: white; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status-bar { margin-bottom: 15px; font-weight: 600; color: #334155; }
+    
+    /* Layout with Sidebar + PDF Viewer */
+    .workspace { display: grid; grid-template-columns: 320px 1fr; gap: 20px; min-height: 600px; }
+    .sidebar { border: 1px solid #e2e8f0; padding: 15px; border-radius: 8px; background: #fafafa; max-height: 800px; overflow-y: auto; }
+    .viewer-pane { border: 1px solid #cbd5e1; border-radius: 8px; background: #525659; padding: 20px; max-height: 800px; overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 20px; }
+    
+    .page-container { position: relative; background: white; box-shadow: 0 4px 8px rgba(0,0,0,0.3); }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+
+<div class="app-container">
+  <h2>PDF Search, View & Hyperlink Eraser</h2>
+  
+  <!-- 1. File Upload Section -->
+  <div class="upload-zone">
+    <input type="file" id="pdf-upload" accept="application/pdf" />
+    <p style="margin: 8px 0 0; color: #64748b; font-size: 14px;">Select any PDF file from your computer to view and edit it.</p>
+  </div>
+
+  <!-- 2. Search & Action Controls -->
+  <div class="controls">
+    <input type="text" id="search-term" placeholder="Enter word or phrase to search..." disabled />
+    <button id="search-btn" class="btn-search" disabled onclick="searchMatches()">Search</button>
+    <button id="delete-btn" class="btn-delete" disabled onclick="deleteSelected()">Delete Selected & Links</button>
+    <button id="download-btn" class="btn-download" disabled onclick="downloadModifiedPDF()">Download PDF</button>
+  </div>
+
+  <div id="status" class="status-bar">Please upload a PDF file to begin.</div>
+
+  <!-- 3. Main Workspace (Results Sidebar + Live PDF Document Viewer) -->
+  <div class="workspace">
+    <div id="results" class="sidebar">No document loaded.</div>
+    <div id="viewer" class="viewer-pane">
+      <p style="color: #cbd5e1; margin-top: 50px;">Document preview will appear here after uploading.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js';
+
+  let pdfArrayBuffer = null;
+  let loadedPdfLibDoc = null;
+  let foundMatches = [];
+
+  // Handle PDF File Upload & Render Document Pages
+  document.getElementById('pdf-upload').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    document.getElementById('status').innerText = `Loading "${file.name}"...`;
+    pdfArrayBuffer = await file.arrayBuffer();
+    
+    // Load document for PDF-Lib editing
+    loadedPdfLibDoc = await PDFLib.PDFDocument.load(pdfArrayBuffer);
+
+    // Render visual pages in viewer
+    await renderPdfViewer();
+
+    // Enable controls
+    document.getElementById('search-term').disabled = false;
+    document.getElementById('search-btn').disabled = false;
+    document.getElementById('download-btn').disabled = false;
+    document.getElementById('status').innerText = `Loaded "${file.name}". Ready to search.`;
+    document.getElementById('results').innerText = 'Type a term above and click Search.';
+  });
+
+  // Render every page onto canvas elements in the viewer
+  async function renderPdfViewer() {
+    const viewer = document.getElementById('viewer');
+    viewer.innerHTML = ''; // Clear previous render
+
+    const pdfjsDoc = await pdfjsLib.getDocument({ data: pdfArrayBuffer.slice(0) }).promise;
+
+    for (let pNum = 1; pNum <= pdfjsDoc.numPages; pNum++) {
+      const page = await pdfjsDoc.getPage(pNum);
+      const viewport = page.getViewport({ scale: 1.2 });
+
+      const pageContainer = document.createElement('div');
+      pageContainer.className = 'page-container';
+      pageContainer.style.width = `${viewport.width}px`;
+      pageContainer.style.height = `${viewport.height}px`;
+
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+
+      pageContainer.appendChild(canvas);
+      viewer.appendChild(pageContainer);
+
+      await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+    }
+  }
+
+  // Search through all pages
+  async function searchMatches() {
+    const term = document.getElementById('search-term').value.trim();
+    if (!term || !pdfArrayBuffer) return;
+
+    document.getElementById('status').innerText = `Searching for "${term}"...`;
+    foundMatches = [];
+
+    const pdfjsDoc = await pdfjsLib.getDocument({ data: pdfArrayBuffer.slice(0) }).promise;
+
+    for (let pIdx = 0; pIdx < pdfjsDoc.numPages; pIdx++) {
+      const page = await pdfjsDoc.getPage(pIdx + 1);
+      const textContent = await page.getTextContent();
+      
+      textContent.items.forEach((item) => {
+        if (item.str.toLowerCase().includes(term.toLowerCase())) {
+          foundMatches.push({
+            pageIndex: pIdx,
+            pageNumber: pIdx + 1,
+            text: item.str,
+            transform: item.transform,
+            width: item.width,
+            height: item.height || 12,
+            selected: true
+          });
+        }
+      });
+    }
+
+    renderMatchResults(term);
+  }
+
+  // Display results list with checkboxes
+  function renderMatchResults(term) {
+    const container = document.getElementById('results');
+    if (foundMatches.length === 0) {
+      container.innerHTML = `<p>No occurrences found for "${term}".</p>`;
+      document.getElementById('delete-btn').disabled = true;
+      document.getElementById('status').innerText = '0 matches found.';
+      return;
+    }
+
+    document.getElementById('delete-btn').disabled = false;
+    document.getElementById('status').innerText = `Found ${foundMatches.length} match(es) for "${term}".`;
+
+    let html = `<div style="margin-bottom: 10px;">
+                  <label><input type="checkbox" checked onchange="toggleSelectAll(this.checked)"> <strong>Select All (${foundMatches.length})</strong></label>
+                </div><hr>`;
+
+    foundMatches.forEach((m, idx) => {
+      html += `
+        <div style="padding: 6px 0;">
+          <label>
+            <input type="checkbox" id="match-${idx}" ${m.selected ? 'checked' : ''} onchange="foundMatches[${idx}].selected = this.checked">
+            Pg ${m.pageNumber}: "<em>${m.text}</em>"
+          </label>
+        </div>`;
+    });
+
+    container.innerHTML = html;
+  }
+
+  function toggleSelectAll(checked) {
+    foundMatches.forEach((m, idx) => {
+      m.selected = checked;
+      const el = document.getElementById(`match-${idx}`);
+      if (el) el.checked = checked;
+    });
+  }
+
+  // Delete chosen occurrences & their link annotations, then refresh view
+  async function deleteSelected() {
+    const selectedList = foundMatches.filter(m => m.selected);
+    if (selectedList.length === 0) return alert('Please select at least one occurrence to delete.');
+
+    const pages = loadedPdfLibDoc.getPages();
+    const searchTerm = document.getElementById('search-term').value.trim().toLowerCase();
+
+    for (const match of selectedList) {
+      const page = pages[match.pageIndex];
+
+      const fullStr = match.text;
+      const lowerStr = fullStr.toLowerCase();
+      const matchIndex = lowerStr.indexOf(searchTerm);
+
+      const transformY = match.transform[5];
+      const fontSize = match.height || 12;
+
+      const charWidthEstimate = match.width / (fullStr.length || 1);
+      const startXOffset = matchIndex > -1 ? matchIndex * charWidthEstimate : 0;
+      const targetWidth = matchIndex > -1 ? searchTerm.length * charWidthEstimate : match.width;
+
+      const boxX = match.transform[4] + startXOffset - 1;
+      const boxY = transformY - 2;
+      const boxW = targetWidth + 3;
+      const boxH = fontSize + 4;
+
+      // 1. Cover text with whiteout
+      page.drawRectangle({
+        x: boxX,
+        y: boxY,
+        width: boxW,
+        height: boxH,
+        color: PDFLib.rgb(1, 1, 1),
+      });
+
+      // 2. Remove overlapping hyperlink annotations (/Annots)
+      const annots = page.node.Annots();
+      if (annots) {
+        const annotsArray = annots.array;
+        for (let i = annotsArray.length - 1; i >= 0; i--) {
+          const dict = loadedPdfLibDoc.context.lookup(annotsArray[i]);
+          if (dict && dict.get(PDFLib.PDFName.of('Subtype'))?.name === 'Link') {
+            const rect = dict.get(PDFLib.PDFName.of('Rect'))?.asArray();
+            if (rect) {
+              const [rX1, rY1, rX2, rY2] = rect.map(n => n.asNumber());
+
+              const overlaps = !(
+                boxX > rX2 || 
+                (boxX + boxW) < rX1 || 
+                boxY > rY2 || 
+                (boxY + boxH) < rY1
+              );
+
+              if (overlaps) {
+                annotsArray.splice(i, 1);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Save modified bytes and re-render the document view
+    pdfArrayBuffer = await loadedPdfLibDoc.save();
+    loadedPdfLibDoc = await PDFLib.PDFDocument.load(pdfArrayBuffer);
+    
+    await renderPdfViewer(); // Live refresh viewer canvas
+
+    document.getElementById('status').innerText = `Successfully deleted ${selectedList.length} occurrence(s) and their links!`;
+    document.getElementById('results').innerHTML = `<p style="color: #059669; font-weight: 600;">Deletion completed! Document view updated.</p>`;
+    document.getElementById('delete-btn').disabled = true;
+  }
+
+  // Download final PDF file
+  async function downloadModifiedPDF() {
+    if (!loadedPdfLibDoc) return;
+    const modifiedBytes = await loadedPdfLibDoc.save();
+    const blob = new Blob([modifiedBytes], { type: 'application/pdf' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'edited_document.pdf';
+    link.click();
+  }
+</script>
+
+</body>
+</html>
