@@ -91,7 +91,7 @@
     document.getElementById('status').innerText = `Loading "${file.name}"...`;
     pdfArrayBuffer = await file.arrayBuffer();
     
-    loadedPdfLibDoc = await PDFLib.PDFDocument.load(pdfArrayBuffer);
+    loadedPdfLibDoc = await PDFLib.PDFDocument.load(pdfArrayBuffer.slice(0));
 
     await renderPdfViewer();
 
@@ -145,16 +145,21 @@
     for (let pIdx = 0; pIdx < pdfjsDoc.numPages; pIdx++) {
       const page = await pdfjsDoc.getPage(pIdx + 1);
       const textContent = await page.getTextContent();
+      const viewport = page.getViewport({ scale: 1.0 });
       
       textContent.items.forEach((item) => {
         if (item.str.toLowerCase().includes(term.toLowerCase())) {
+          // Normalize matrix transforms across scaled fonts
+          const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+          
           foundMatches.push({
             pageIndex: pIdx,
             pageNumber: pIdx + 1,
             text: item.str,
-            transform: item.transform,
-            width: item.width,
-            height: item.height || 12,
+            x: tx[4],
+            y: tx[5],
+            width: item.width || (item.str.length * 8),
+            height: item.height || 14,
             selected: true
           });
         }
@@ -201,39 +206,28 @@
     });
   }
 
-  // Cover selected text AND completely remove ALL hyperlink annotations
   async function deleteSelected() {
     const selectedList = foundMatches.filter(m => m.selected);
     if (selectedList.length === 0) return alert('Please select at least one occurrence to delete.');
 
-    const pages = loadedPdfLibDoc.getPages();
-    const searchTerm = document.getElementById('search-term').value.trim().toLowerCase();
+    document.getElementById('status').innerText = 'Deleting text & erasing links...';
 
-    // Track which pages need link cleaning
+    const pages = loadedPdfLibDoc.getPages();
     const pagesToClean = new Set();
 
     for (const match of selectedList) {
       const page = pages[match.pageIndex];
       pagesToClean.add(match.pageIndex);
 
-      const fullStr = match.text;
-      const lowerStr = fullStr.toLowerCase();
-      const matchIndex = lowerStr.indexOf(searchTerm);
+      const pageHeight = page.getHeight();
 
-      const transformX = match.transform[4];
-      const transformY = match.transform[5];
-      const fontSize = match.height || 12;
+      // Convert top-left Y coordinate to PDF bottom-left coordinate
+      const boxX = Math.max(0, match.x - 4);
+      const boxY = Math.max(0, pageHeight - match.y - 4);
+      const boxW = match.width + 8;
+      const boxH = match.height + 8;
 
-      const charWidthEstimate = match.width / (fullStr.length || 1);
-      const startXOffset = matchIndex > -1 ? matchIndex * charWidthEstimate : 0;
-      const targetWidth = matchIndex > -1 ? searchTerm.length * charWidthEstimate : match.width;
-
-      const boxX = transformX + startXOffset - 2;
-      const boxY = transformY - 4; 
-      const boxW = targetWidth + 6;
-      const boxH = fontSize + 8;
-
-      // 1. Cover visual text with whiteout
+      // 1. Draw whiteout box over detected string
       page.drawRectangle({
         x: boxX,
         y: boxY,
@@ -243,36 +237,26 @@
       });
     }
 
-    // 2. Complete destruction of ALL hyperlink annotations on affected pages
+    // 2. Clear ALL hyperlink objects from target pages
     pagesToClean.forEach(pIndex => {
       const page = pages[pIndex];
-      const annots = page.node.Annots();
+      const node = page.node;
       
-      if (annots) {
-        const annotsArray = annots.array;
-        for (let i = annotsArray.length - 1; i >= 0; i--) {
-          const dict = loadedPdfLibDoc.context.lookup(annotsArray[i]);
-          if (dict) {
-            const subtype = dict.get(PDFLib.PDFName.of('Subtype'))?.name;
-            const hasAction = dict.has(PDFLib.PDFName.of('A'));
-            
-            // If it is a Link subtype OR has an Action dictionary, remove it completely
-            if (subtype === 'Link' || hasAction) {
-              annotsArray.splice(i, 1);
-            }
-          }
-        }
+      // Purge /Annots array safely from page dictionary
+      if (node.has(PDFLib.PDFName.of('Annots'))) {
+        node.delete(PDFLib.PDFName.of('Annots'));
       }
     });
 
-    // Save and re-render document
-    pdfArrayBuffer = await loadedPdfLibDoc.save();
-    loadedPdfLibDoc = await PDFLib.PDFDocument.load(pdfArrayBuffer);
+    // Save modifications to array buffer and reload PDF instance
+    const savedBytes = await loadedPdfLibDoc.save();
+    pdfArrayBuffer = savedBytes.buffer.slice(0);
+    loadedPdfLibDoc = await PDFLib.PDFDocument.load(pdfArrayBuffer.slice(0));
     
     await renderPdfViewer();
 
     document.getElementById('status').innerText = `Successfully erased text and removed all hyperlinks!`;
-    document.getElementById('results').innerHTML = `<p style="color: #059669; font-weight: 600;">Deletion completed! All link annotations cleared.</p>`;
+    document.getElementById('results').innerHTML = `<p style="color: #059669; font-weight: 600;">Deletion completed! All selected text and link objects removed.</p>`;
     document.getElementById('delete-btn').disabled = true;
   }
 
